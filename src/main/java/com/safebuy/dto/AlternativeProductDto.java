@@ -11,10 +11,7 @@ public class AlternativeProductDto {
     // 제목
     private String title;
 
-    // 브랜드
-    private String brand;
-
-    //
+    // 제조사
     private String maker;
 
     // 가격

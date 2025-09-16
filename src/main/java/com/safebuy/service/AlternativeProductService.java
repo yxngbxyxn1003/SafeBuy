@@ -24,7 +24,6 @@ public class AlternativeProductService {
 
     private static class AlternativeProduct {
         public String title;
-        public String brand;
         public String maker;
         @JsonProperty("lprice")
         public String price;
@@ -97,7 +96,7 @@ public class AlternativeProductService {
 
         List<AlternativeProductDto> results = new ArrayList<>();
         for (AlternativeProduct item : response.items) {
-            if (item.maker == null || item.maker.isEmpty() || dbMaker.equals(item.maker)) continue;
+            if (item.maker == null || item.maker.isEmpty() || item.maker.equalsIgnoreCase("UNKNOWN") || dbMaker.equals(item.maker)) continue;
 
             if (dbCategory != null && !dbCategory.isBlank() && !dbCategory.equals("기타")) {
                 if (!(item.category1.contains(dbCategory) ||
@@ -108,7 +107,6 @@ public class AlternativeProductService {
 
             AlternativeProductDto dto = new AlternativeProductDto();
             dto.setTitle(item.title.replaceAll("<[^>]*>", ""));
-            dto.setBrand(item.brand);
             dto.setMaker(item.maker);
             dto.setPrice(item.price.replaceAll("(\\d)(?=(\\d{3})+$)", "$1,") + "원");
             dto.setImage(item.image);
