@@ -17,10 +17,11 @@ class AlternativeProductServiceTest {
 
     @Test
     void testFindAlternatives() {
-        String dbCategory = "완구/인형";
-        String dbBrand = "콩순이";
+        String productName = "베비라보 호빵맨 사이좋은 콘서트";
+        String dbCategory = "육아";
+        String dbBrand = "주식회사 반다이";
 
-        List<AlternativeProductDto> results = service.findAlternatives(dbCategory, dbBrand);
+        List<AlternativeProductDto> results = service.findAlternatives(productName, dbCategory, dbBrand);
 
         assertNotNull(results);
         assertTrue(results.size() > 0, "추천할 대체 상품이 존재하지 않습니다.");

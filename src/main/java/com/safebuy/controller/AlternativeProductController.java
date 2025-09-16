@@ -20,10 +20,11 @@ public class AlternativeProductController {
     // 대체 상품 미리보기 (3개)
     @GetMapping("/preview")
     public List<AlternativeProductDto> getPreviewAlternatives(
+            @RequestParam String productName,
             @RequestParam String category,
             @RequestParam String brand
     ) {
-        return alternativeProductService.findAlternatives(category, brand)
+        return alternativeProductService.findAlternatives(productName, category, brand)
                 .stream()
                 .limit(3)
                 .toList();
@@ -32,10 +33,11 @@ public class AlternativeProductController {
     // 대체 상품 더보기 (전체, 최대 20개)
     @GetMapping("/full")
     public List<AlternativeProductDto> getFullAlternatives(
+            @RequestParam String productName,
             @RequestParam String category,
             @RequestParam String brand
     ) {
-        return alternativeProductService.findAlternatives(category, brand)
+        return alternativeProductService.findAlternatives(productName, category, brand)
                 .stream()
                 .limit(20)
                 .toList();
