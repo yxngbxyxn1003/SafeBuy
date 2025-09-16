@@ -22,9 +22,9 @@ public class AlternativeProductController {
     public List<AlternativeProductDto> getPreviewAlternatives(
             @RequestParam String productName,
             @RequestParam String category,
-            @RequestParam String brand
+            @RequestParam String maker
     ) {
-        return alternativeProductService.findAlternatives(productName, category, brand)
+        return alternativeProductService.findAlternatives(productName, category, maker)
                 .stream()
                 .limit(3)
                 .toList();
@@ -35,9 +35,9 @@ public class AlternativeProductController {
     public List<AlternativeProductDto> getFullAlternatives(
             @RequestParam String productName,
             @RequestParam String category,
-            @RequestParam String brand
+            @RequestParam String maker
     ) {
-        return alternativeProductService.findAlternatives(productName, category, brand)
+        return alternativeProductService.findAlternatives(productName, category, maker)
                 .stream()
                 .limit(20)
                 .toList();

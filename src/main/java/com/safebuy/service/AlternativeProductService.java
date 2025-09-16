@@ -25,6 +25,7 @@ public class AlternativeProductService {
     private static class AlternativeProduct {
         public String title;
         public String brand;
+        public String maker;
         @JsonProperty("lprice")
         public String price;
         public String image;
@@ -39,13 +40,13 @@ public class AlternativeProductService {
         public List<AlternativeProduct> items;
     }
 
-    public List<AlternativeProductDto> findAlternatives(String productName, String dbCategory, String dbBrand) {
+    public List<AlternativeProductDto> findAlternatives(String productName, String dbCategory, String dbMaker) {
         if (productName == null || productName.isBlank()) {
             return List.of();
         }
 
         // 제품명의 전체 문자열로 검색
-        List<AlternativeProductDto> results = searchByKeyword(productName, dbCategory, dbBrand);
+        List<AlternativeProductDto> results = searchByKeyword(productName, dbCategory, dbMaker);
         if (!results.isEmpty()) {
             return results; // 검색 결과가 존재하는 경우, 반환
         }
@@ -56,7 +57,7 @@ public class AlternativeProductService {
         List<AlternativeProductDto> finalResults = new ArrayList<>();
 
         for (String keyword : keywords) {
-            List<AlternativeProductDto> partialResults = searchByKeyword(keyword, dbCategory, dbBrand);
+            List<AlternativeProductDto> partialResults = searchByKeyword(keyword, dbCategory, dbMaker);
             for (AlternativeProductDto dto : partialResults) {
                 if (seenLinks.contains(dto.getLink())) continue;
                 seenLinks.add(dto.getLink());
@@ -68,7 +69,7 @@ public class AlternativeProductService {
     }
 
     // 공통 검색
-    private List<AlternativeProductDto> searchByKeyword(String keyword, String dbCategory, String dbBrand) {
+    private List<AlternativeProductDto> searchByKeyword(String keyword, String dbCategory, String dbMaker) {
         String url = "https://openapi.naver.com/v1/search/shop.json"
                 + "?query=" + keyword
                 + "&display=100"
@@ -96,7 +97,7 @@ public class AlternativeProductService {
 
         List<AlternativeProductDto> results = new ArrayList<>();
         for (AlternativeProduct item : response.items) {
-            if (item.brand == null || item.brand.isEmpty() || dbBrand.equals(item.brand)) continue;
+            if (item.maker == null || item.maker.isEmpty() || dbMaker.equals(item.maker)) continue;
 
             if (dbCategory != null && !dbCategory.isBlank() && !dbCategory.equals("기타")) {
                 if (!(item.category1.contains(dbCategory) ||
@@ -108,6 +109,7 @@ public class AlternativeProductService {
             AlternativeProductDto dto = new AlternativeProductDto();
             dto.setTitle(item.title.replaceAll("<[^>]*>", ""));
             dto.setBrand(item.brand);
+            dto.setMaker(item.maker);
             dto.setPrice(item.price.replaceAll("(\\d)(?=(\\d{3})+$)", "$1,") + "원");
             dto.setImage(item.image);
             dto.setLink(item.link);

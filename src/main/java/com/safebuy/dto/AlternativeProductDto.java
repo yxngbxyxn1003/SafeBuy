@@ -14,6 +14,9 @@ public class AlternativeProductDto {
     // 브랜드
     private String brand;
 
+    //
+    private String maker;
+
     // 가격
     private String price;
 
