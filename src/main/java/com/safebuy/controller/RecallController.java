@@ -39,6 +39,9 @@ public class RecallController {
     @GetMapping("/test")
     public ResponseEntity<String> testApi() {
         try {
+            // SSL 우회 설정
+            disableSSLVerification();
+            
             // 간단한 테스트 API 호출
             String testUrl = "https://www.consumer.go.kr/openapi/recall/contents/index.do?serviceKey=S54NVI2HQL&pageNo=1&cntPerPage=1&cntntsId=0501";
             
@@ -47,7 +50,7 @@ public class RecallController {
             
             // 브라우저와 동일한 헤더 설정
             connection.setRequestMethod("GET");
-            connection.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
+            connection.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8,application/json");
             connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
             connection.setRequestProperty("Accept-Language", "ko-KR,ko;q=0.9,en;q=0.8");
             connection.setRequestProperty("Accept-Encoding", "gzip, deflate, br");
@@ -82,6 +85,45 @@ public class RecallController {
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             return ResponseEntity.ok("테스트 실패: " + e.getMessage());
+        }
+    }
+
+    //SSL 인증서 검증을 우회하는 설정
+    private void disableSSLVerification() {
+        try {
+            // 모든 인증서를 신뢰하는 TrustManager 생성
+            javax.net.ssl.TrustManager[] trustAllCerts = new javax.net.ssl.TrustManager[] {
+                new javax.net.ssl.X509TrustManager() {
+                    public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+                        return new java.security.cert.X509Certificate[0];
+                    }
+                    public void checkClientTrusted(java.security.cert.X509Certificate[] certs, String authType) {
+                        // 모든 클라이언트 인증서 신뢰
+                    }
+                    public void checkServerTrusted(java.security.cert.X509Certificate[] certs, String authType) {
+                        // 모든 서버 인증서 신뢰
+                    }
+                }
+            };
+
+            // SSL 컨텍스트 초기화 (TLS 사용)
+            javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("TLS");
+            sc.init(null, trustAllCerts, new java.security.SecureRandom());
+            javax.net.ssl.HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+
+            // 호스트명 검증 비활성화
+            javax.net.ssl.HttpsURLConnection.setDefaultHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
+                public boolean verify(String hostname, javax.net.ssl.SSLSession session) {
+                    return true;
+                }
+            });
+
+            // 시스템 속성 설정으로 추가 보안 검증 우회
+            System.setProperty("com.sun.net.ssl.checkRevocation", "false");
+            System.setProperty("sun.security.ssl.allowUnsafeRenegotiation", "true");
+            
+        } catch (Exception e) {
+            // 로그 없이 조용히 처리
         }
     }
 

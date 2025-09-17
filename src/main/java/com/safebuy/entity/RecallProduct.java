@@ -28,4 +28,7 @@ public class RecallProduct {
 
     @Column(name = "shrtcom_cn", columnDefinition = "LONGTEXT")
     private String shrtcomCn;           // 결함내용
+
+    @Column(name = "category", length = 50)
+    private String category;             // 제품 카테고리 (식품, 가구, 스포츠, 육아, 가전, 생활/건강, 디지털)
 }
