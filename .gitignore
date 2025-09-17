@@ -38,3 +38,6 @@ out/
 
 ### .properties ###
 src/main/resources/application.properties
+
+### Environment Variables ###
+.env
