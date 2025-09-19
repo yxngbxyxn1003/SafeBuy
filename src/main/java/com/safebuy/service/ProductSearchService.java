@@ -1,5 +1,6 @@
 package com.safebuy.service;
 
+import com.safebuy.dto.AlternativeProductDto;
 import com.safebuy.dto.ProductSearchRequest;
 import com.safebuy.dto.ProductSearchResponse;
 import com.safebuy.entity.RecallProduct;
@@ -20,6 +21,7 @@ public class ProductSearchService {
 
     private final RecallProductRepository repository;
     private final ImageAnalysisService imageAnalysisService;
+    private final AlternativeProductService alternativeProductService;
 
     public ProductSearchResponse searchProduct(ProductSearchRequest request) {
         log.info("제품 검색 요청: {}", request);
@@ -44,13 +46,22 @@ public class ProductSearchService {
         RecallProduct foundProduct = performSequentialSearch(request);
         
         if (foundProduct != null) {
-            return ProductSearchResponse.builder()
+            ProductSearchResponse response = ProductSearchResponse.builder()
                     .found(true)
                     .productName(foundProduct.getProductNm())
                     .defectContent(foundProduct.getShrtcomCn())
                     .manufacturer(foundProduct.getMakr())
                     .publicationDate(foundProduct.getRecallPublictBgnde())
                     .build();
+
+            // 대체 상품 추천
+            List<AlternativeProductDto> alternatives =
+                    alternativeProductService.findAlternatives(foundProduct.getProductNm(),
+                            foundProduct.getCategory(),
+                            foundProduct.getMakr());
+            response.setAlternatives(alternatives);
+
+            return response;
         } else {
             return ProductSearchResponse.builder()
                     .found(false)

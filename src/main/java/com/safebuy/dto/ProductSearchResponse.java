@@ -3,6 +3,8 @@ package com.safebuy.dto;
 import lombok.Data;
 import lombok.Builder;
 
+import java.util.List;
+
 @Data
 @Builder
 public class ProductSearchResponse {
@@ -12,4 +14,7 @@ public class ProductSearchResponse {
     private String manufacturer;     // 제조사
     private String publicationDate;  // 공표일
     private String message;          // 메시지 (검색 결과 없을 때)
+
+    // 대체 상품 추천 리스트
+    private List<AlternativeProductDto> alternatives;
 }
