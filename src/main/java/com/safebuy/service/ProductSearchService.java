@@ -10,6 +10,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -22,6 +24,9 @@ public class ProductSearchService {
     private final RecallProductRepository repository;
     private final ImageAnalysisService imageAnalysisService;
     private final AlternativeProductService alternativeProductService;
+    
+    private static final String DETAIL_BASE_URL = 
+            "https://www.consumer.go.kr/user/ftc/consumer/recallInfo/1077/selectRecallInfoForeignDetail.do";
 
     public ProductSearchResponse searchProduct(ProductSearchRequest request) {
         log.info("제품 검색 요청: {}", request);
@@ -52,6 +57,7 @@ public class ProductSearchService {
                     .defectContent(foundProduct.getShrtcomCn())
                     .manufacturer(foundProduct.getMakr())
                     .publicationDate(foundProduct.getRecallPublictBgnde())
+                    .detailUrl(buildDetailUrl(foundProduct.getRecallSn()))
                     .build();
 
             // 대체 상품 추천
@@ -172,5 +178,20 @@ public class ProductSearchService {
         }
 
         return null;
+    }
+
+  
+    private String buildDetailUrl(String recallSn) {
+        if (!StringUtils.hasText(recallSn)) {
+            return null;
+        }
+        
+        try {
+            String encodedRecallSn = URLEncoder.encode(recallSn, StandardCharsets.UTF_8);
+            return DETAIL_BASE_URL + "?recallSn=" + encodedRecallSn;
+        } catch (Exception e) {
+            log.warn("상세 URL 생성 실패: recallSn={}", recallSn, e);
+            return null;
+        }
     }
 }
