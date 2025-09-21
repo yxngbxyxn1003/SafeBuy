@@ -18,7 +18,7 @@ import java.util.Map;
 @Slf4j
 public class ImageAnalysisService {
 
-    @Value("${openai.api.key}")
+    @Value("${spring.ai.openai.api-key}")
     private String openaiApiKey;
 
     private final RestTemplate restTemplate;
