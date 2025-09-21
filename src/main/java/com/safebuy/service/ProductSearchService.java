@@ -11,8 +11,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-
 import java.util.ArrayList;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -26,6 +27,10 @@ public class ProductSearchService {
     private final ImageAnalysisService imageAnalysisService;
     private final AlternativeProductService alternativeProductService;
     private final SearchQueryEnhancerService searchQueryEnhancerService; // AI 검색어 확장 서비스 주입
+
+    private static final String DETAIL_BASE_URL = 
+            "https://www.consumer.go.kr/user/ftc/consumer/recallInfo/1077/selectRecallInfoForeignDetail.do";
+
 
     public ProductSearchResponse searchProduct(ProductSearchRequest request) {
         log.info("제품 검색 요청: {}", request);
@@ -251,6 +256,19 @@ public class ProductSearchService {
             return (productName != null ? productName : "") + " " +
                     (manufacturer != null ? manufacturer : "") + " " +
                     (modelName != null ? modelName : "");
+  
+    private String buildDetailUrl(String recallSn) {
+        if (!StringUtils.hasText(recallSn)) {
+            return null;
+        }
+        
+        try {
+            String encodedRecallSn = URLEncoder.encode(recallSn, StandardCharsets.UTF_8);
+            return DETAIL_BASE_URL + "?recallSn=" + encodedRecallSn;
+        } catch (Exception e) {
+            log.warn("상세 URL 생성 실패: recallSn={}", recallSn, e);
+            return null;
+
         }
     }
 }
