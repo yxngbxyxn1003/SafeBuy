@@ -5,11 +5,14 @@ import com.safebuy.dto.ProductSearchRequest;
 import com.safebuy.dto.ProductSearchResponse;
 import com.safebuy.entity.RecallProduct;
 import com.safebuy.repository.RecallProductRepository;
+import com.safebuy.util.RiskEvaluator;
+import com.safebuy.util.TextNormalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -24,132 +27,107 @@ public class ProductSearchService {
     private final RecallProductRepository repository;
     private final ImageAnalysisService imageAnalysisService;
     private final AlternativeProductService alternativeProductService;
-    
-    private static final String DETAIL_BASE_URL = 
+    private final SearchQueryEnhancerService searchQueryEnhancerService; // AI 검색어 확장 서비스 주입
+
+    private static final String DETAIL_BASE_URL =
             "https://www.consumer.go.kr/user/ftc/consumer/recallInfo/1077/selectRecallInfoForeignDetail.do";
+
 
     public ProductSearchResponse searchProduct(ProductSearchRequest request) {
         log.info("제품 검색 요청: {}", request);
-        
-        // 이미지 파일 상세 정보 로깅 (모바일 디버깅용)
-        if (request.getImage() != null) {
-            log.info("이미지 파일 정보 - 이름: {}, 크기: {}, 타입: {}, 비어있음: {}", 
-                    request.getImage().getOriginalFilename(),
-                    request.getImage().getSize(),
-                    request.getImage().getContentType(),
-                    request.getImage().isEmpty());
-        } else {
-            log.warn("이미지 파일이 null입니다 - 모바일 업로드 문제 가능성");
-        }
-        
+
         // 입력값 검증 - 최소 하나 이상의 필드가 입력되어야 함
         if (!isValidInput(request)) {
-            log.warn("입력값 검증 실패 - 모든 필드가 비어있음");
             return ProductSearchResponse.builder()
                     .found(false)
                     .message("최소 하나 이상의 정보를 입력해주세요.")
                     .build();
         }
 
-        // 이미지가 있는 경우 AI 분석 수행 (모바일 호환성 개선)
-        if (isValidImage(request.getImage())) {
-            log.info("이미지 분석 시작");
-            try {
-                String analysisResult = imageAnalysisService.analyzeImage(request.getImage());
-                if (analysisResult != null && !analysisResult.trim().isEmpty()) {
-                    log.info("이미지 분석 성공: {}", analysisResult);
-                    parseAnalysisResult(analysisResult, request);
-                } else {
-                    log.warn("이미지 분석 결과가 비어있음");
-                }
-            } catch (Exception e) {
-                log.error("이미지 분석 중 오류 발생: {}", e.getMessage(), e);
-                // 이미지 분석 실패해도 다른 정보로 검색 계속 진행
+        // 이미지가 있는 경우 AI 분석 수행
+        if (request.getImage() != null && !request.getImage().isEmpty()) {
+            String analysisResult = imageAnalysisService.analyzeImage(request.getImage());
+            if (analysisResult != null) {
+                parseAnalysisResult(analysisResult, request);
             }
         }
 
-        // 순차적 검색 수행
-        RecallProduct foundProduct = performSequentialSearch(request);
-        
-        if (foundProduct != null) {
-            log.info("찾은 제품 정보 - recallSn: '{}', productName: '{}', manufacturer: '{}'", 
-                    foundProduct.getRecallSn(), foundProduct.getProductNm(), foundProduct.getMakr());
-            
-            ProductSearchResponse response = ProductSearchResponse.builder()
-                    .found(true)
-                    .productName(foundProduct.getProductNm())
-                    .defectContent(foundProduct.getShrtcomCn())
-                    .manufacturer(foundProduct.getMakr())
-                    .publicationDate(foundProduct.getRecallPublictBgnde())
-                    .detailUrl(buildDetailUrl(foundProduct.getRecallSn()))
-                    .build();
+        // 정규화 단계
+        String normalizedProductName = TextNormalizer.normalizeText(request.getProductName());
+        String normalizedManufacturer = TextNormalizer.normalizeManufacturer(request.getManufacturer());
+        String normalizedModelName = TextNormalizer.normalizeText(request.getModelName());
 
-            // 대체 상품 추천
-            List<AlternativeProductDto> alternatives =
-                    alternativeProductService.findAlternatives(foundProduct.getProductNm(),
-                            foundProduct.getCategory(),
-                            foundProduct.getMakr());
-            response.setAlternatives(alternatives);
+        // 검색어 확장 (정규화 된 문자열 기반)
+        List<String> expandedProductNames = expandIfNotBlank(normalizedProductName);
+        List<String> expandedManufacturers = expandIfNotBlank(normalizedManufacturer);
+        List<String> expandedModels = expandIfNotBlank(normalizedModelName);
 
-            return response;
-        } else {
-            return ProductSearchResponse.builder()
-                    .found(false)
-                    .message("해당 제품은 리콜데이터에 해당하는 검색 결과가 없습니다.")
-                    .build();
+        // 후보 조합 리스트 생성
+        List<SearchCandidate> candidates =
+                buildSearchCandidates(expandedProductNames, expandedManufacturers, expandedModels);
+
+        // 단계적 DB 검색 + (변경) 필드별 위험도 계산 호출
+        for (SearchCandidate candidate : candidates) {
+            RecallProduct foundProduct = performSequentialSearch(candidate);
+            if (foundProduct != null) {
+                // (변경 사항) 이전에는 candidate.toString()으로 한 문장 비교 → 매칭 실패 원인
+                //     → 필드별로 분리해서 RiskEvaluator에 전달 (모델/제품/제조사 각각 독립 가중치)
+                int riskScore = RiskEvaluator.calculateRiskScore(
+                        candidate.productName,
+                        candidate.manufacturer,
+                        candidate.modelName,
+                        foundProduct
+                );
+                String riskLevel = RiskEvaluator.riskLevelFromScore(riskScore);
+
+                ProductSearchResponse response = ProductSearchResponse.builder()
+                        .found(true)
+                        .productName(foundProduct.getProductNm())
+                        .defectContent(foundProduct.getShrtcomCn())
+                        .manufacturer(foundProduct.getMakr())
+                        .publicationDate(foundProduct.getRecallPublictBgnde())
+                        .riskScore(riskScore)
+                        .riskLevel(riskLevel)
+                        .build();
+
+                // 대체 상품 추천
+                List<AlternativeProductDto> alternatives =
+                        alternativeProductService.findAlternatives(
+                                foundProduct.getProductNm(),
+                                foundProduct.getCategory(),
+                                foundProduct.getMakr()
+                        );
+                response.setAlternatives(alternatives);
+
+                return response;
+            }
         }
+
+        // 정확 매칭 실패 시: 정규화 기반 부분 매칭 fallback
+        ProductSearchResponse fallbackResponse =
+                buildFallbackResponse(normalizedProductName, normalizedManufacturer);
+        if (fallbackResponse != null) {
+            return fallbackResponse;
+        }
+
+        // 최종 미발견
+        return ProductSearchResponse.builder()
+                .found(false)
+                .message("해당 제품은 리콜데이터 검색 결과에 존재하지 않습니다.")
+                .build();
     }
 
+    /* 내부 유틸 메서드 */
+
+    // 입력값이 최소 1개라도 있는지 확인
     private boolean isValidInput(ProductSearchRequest request) {
-        boolean hasTextInput = StringUtils.hasText(request.getProductName()) ||
-                              StringUtils.hasText(request.getManufacturer()) ||
-                              StringUtils.hasText(request.getModelName());
-        boolean hasValidImage = isValidImage(request.getImage());
-        
-        log.info("입력값 검증 - 텍스트 입력: {}, 유효한 이미지: {}", hasTextInput, hasValidImage);
-        
-        return hasTextInput || hasValidImage;
-    }
-    
-    private boolean isValidImage(org.springframework.web.multipart.MultipartFile image) {
-        if (image == null) {
-            return false;
-        }
-        
-        // 파일이 비어있는지 확인
-        if (image.isEmpty()) {
-            log.warn("이미지 파일이 비어있음");
-            return false;
-        }
-        
-        // 파일 크기 확인 (최대 30MB)
-        long maxSize = 30 * 1024 * 1024; // 30MB
-        if (image.getSize() > maxSize) {
-            log.warn("이미지 파일 크기가 너무 큼: {} bytes", image.getSize());
-            return false;
-        }
-        
-        // 파일 타입 확인 (모바일 호환성 개선)
-        String contentType = image.getContentType();
-        if (contentType != null) {
-            boolean isValidType = contentType.startsWith("image/") ||
-                                 contentType.equals("application/octet-stream"); // 모바일에서 가끔 이 타입으로 전송됨
-            if (!isValidType) {
-                log.warn("지원하지 않는 파일 타입: {}", contentType);
-                return false;
-            }
-        }
-        
-        // 파일명 확인
-        String originalFilename = image.getOriginalFilename();
-        if (originalFilename != null && !originalFilename.trim().isEmpty()) {
-            log.info("이미지 파일 검증 성공 - 이름: {}, 크기: {}, 타입: {}", 
-                    originalFilename, image.getSize(), contentType);
-        }
-        
-        return true;
+        return StringUtils.hasText(request.getProductName()) ||
+                StringUtils.hasText(request.getManufacturer()) ||
+                StringUtils.hasText(request.getModelName()) ||
+                (request.getImage() != null && !request.getImage().isEmpty());
     }
 
+    // AI 분석 결과(문자열)를 파싱해서 request 필드에 세팅
     private void parseAnalysisResult(String analysisResult, ProductSearchRequest request) {
         // AI 분석 결과에서 제품명, 제조사, 모델명 추출
         Pattern productNamePattern = Pattern.compile("제품명:\\s*([^,]+)");
@@ -171,99 +149,145 @@ public class ProductSearchService {
         }
     }
 
-    private RecallProduct performSequentialSearch(ProductSearchRequest request) {
-        // 1단계: 제품명으로만 검색
-        if (StringUtils.hasText(request.getProductName())) {
-            List<RecallProduct> products = repository.findByProductNmContainingIgnoreCase(request.getProductName());
-            if (products.size() == 1) {
-                log.info("제품명으로 단일 결과 발견: {}", products.get(0).getProductNm());
-                return products.get(0);
-            } else if (products.size() > 1) {
-                log.info("제품명으로 {}개 결과 발견, 다음 단계 진행", products.size());
-            } else {
-                log.info("제품명으로 검색 결과 없음");
+    // 특정 입력 문자열이 비어있지 않으면 확장 실행
+    private List<String> expandIfNotBlank(String value) {
+        if (StringUtils.hasText(value)) {
+            try {
+                return searchQueryEnhancerService.enhanceQuery(value);
+            } catch (Exception e) {
+                log.error("검색어 확장 실패: {}", value, e);
+                return List.of(value); // 실패 시 원래 값만 반환
             }
+        }
+        return new ArrayList<>(); // 값이 없으면 빈 리스트 반환
+    }
+
+    // 세 필드(제품명/제조사/모델명) 확장 후보를 조합해서 candidate 리스트 생성
+    private List<SearchCandidate> buildSearchCandidates(List<String> productNames, List<String> manufacturers, List<String> models) {
+        List<SearchCandidate> candidates = new ArrayList<>();
+
+        if (productNames.isEmpty()) productNames = List.of("");
+        if (manufacturers.isEmpty()) manufacturers = List.of("");
+        if (models.isEmpty()) models = List.of("");
+
+        for (String pn : productNames) {
+            for (String mf : manufacturers) {
+                for (String md : models) {
+                    candidates.add(new SearchCandidate(pn, mf, md));
+                }
+            }
+        }
+        return candidates;
+    }
+
+    // DB 검색 단계 수행 (파라미터 SearchCandidate 객체로 수정, 로직도 수정함)
+    private RecallProduct performSequentialSearch(SearchCandidate candidate) {
+        String productName = candidate.productName;
+        String manufacturer = candidate.manufacturer;
+        String modelName = candidate.modelName;
+
+        // 1단계: 제품명으로만 검색
+        if (StringUtils.hasText(productName)) {
+            List<RecallProduct> products = repository.findByProductNmContainingIgnoreCase(productName);
+            if (!products.isEmpty()) return products.get(0);
         }
 
         // 2단계: 제품명 + 제조사로 검색
-        if (StringUtils.hasText(request.getProductName()) && StringUtils.hasText(request.getManufacturer())) {
-            List<RecallProduct> products = repository.findByProductNmContainingIgnoreCaseAndMakrContainingIgnoreCase(
-                    request.getProductName(), request.getManufacturer());
-            if (products.size() == 1) {
-                log.info("제품명+제조사로 단일 결과 발견: {}", products.get(0).getProductNm());
-                return products.get(0);
-            } else if (products.size() > 1) {
-                log.info("제품명+제조사로 {}개 결과 발견, 다음 단계 진행", products.size());
-            } else {
-                log.info("제품명+제조사로 검색 결과 없음");
-            }
+        if (StringUtils.hasText(productName) && StringUtils.hasText(manufacturer)) {
+            List<RecallProduct> products = repository.findByProductNmContainingIgnoreCaseAndMakrContainingIgnoreCase(productName, manufacturer);
+            if (!products.isEmpty()) return products.get(0);
         }
 
         // 3단계: 제품명 + 제조사 + 모델명으로 검색
-        if (StringUtils.hasText(request.getProductName()) && 
-            StringUtils.hasText(request.getManufacturer()) && 
-            StringUtils.hasText(request.getModelName())) {
-            
-            List<RecallProduct> products = repository.findByProductNmContainingIgnoreCaseAndMakrContainingIgnoreCaseAndModlNmInfoContainingIgnoreCase(
-                    request.getProductName(), request.getManufacturer(), request.getModelName());
-            if (products.size() == 1) {
-                log.info("제품명+제조사+모델명으로 단일 결과 발견: {}", products.get(0).getProductNm());
-                return products.get(0);
-            } else if (products.size() > 1) {
-                log.info("제품명+제조사+모델명으로 {}개 결과 발견, 첫 번째 결과 반환", products.size());
-                return products.get(0);
-            } else {
-                log.info("제품명+제조사+모델명으로 검색 결과 없음");
-            }
+        if (StringUtils.hasText(productName) && StringUtils.hasText(manufacturer) && StringUtils.hasText(modelName)) {
+            List<RecallProduct> products = repository.findByProductNmContainingIgnoreCaseAndMakrContainingIgnoreCaseAndModlNmInfoContainingIgnoreCase(productName, manufacturer, modelName);
+            if (!products.isEmpty()) return products.get(0);
         }
 
-        // 4단계: 제조사만으로 검색 (제품명이 없는 경우)
-        if (!StringUtils.hasText(request.getProductName()) && StringUtils.hasText(request.getManufacturer())) {
-            List<RecallProduct> products = repository.findByMakrContainingIgnoreCase(request.getManufacturer());
-            if (products.size() == 1) {
-                log.info("제조사로 단일 결과 발견: {}", products.get(0).getProductNm());
-                return products.get(0);
-            } else if (products.size() > 1) {
-                log.info("제조사로 {}개 결과 발견, 첫 번째 결과 반환", products.size());
-                return products.get(0);
-            }
+        // 4단계: 제조사만으로 검색
+        if (!StringUtils.hasText(productName) && StringUtils.hasText(manufacturer)) {
+            List<RecallProduct> products = repository.findByMakrContainingIgnoreCase(manufacturer);
+            if (!products.isEmpty()) return products.get(0);
         }
 
-        // 5단계: 모델명만으로 검색 (제품명, 제조사가 없는 경우)
-        if (!StringUtils.hasText(request.getProductName()) && 
-            !StringUtils.hasText(request.getManufacturer()) && 
-            StringUtils.hasText(request.getModelName())) {
-            
-            List<RecallProduct> products = repository.findByModlNmInfoContainingIgnoreCase(request.getModelName());
-            if (products.size() == 1) {
-                log.info("모델명으로 단일 결과 발견: {}", products.get(0).getProductNm());
-                return products.get(0);
-            } else if (products.size() > 1) {
-                log.info("모델명으로 {}개 결과 발견, 첫 번째 결과 반환", products.size());
-                return products.get(0);
-            }
+        // 5단계: 모델명만으로 검색
+        if (!StringUtils.hasText(productName) && !StringUtils.hasText(manufacturer) && StringUtils.hasText(modelName)) {
+            List<RecallProduct> products = repository.findByModlNmInfoContainingIgnoreCase(modelName);
+            if (!products.isEmpty()) return products.get(0);
         }
 
         return null;
     }
 
-  
+    // 부분 매칭 메서드
+    private ProductSearchResponse buildFallbackResponse(String productName, String manufacturer) {
+        if (!StringUtils.hasText(productName) && !StringUtils.hasText(manufacturer)) return null;
+
+        List<RecallProduct> all = repository.findAll();
+        for (RecallProduct p : all) {
+            String dbMan = TextNormalizer.normalizeManufacturer(p.getMakr());
+            String dbProd = TextNormalizer.normalizeText(p.getProductNm());
+
+            boolean matchByProd = productName != null && dbProd != null && dbProd.contains(productName);
+            boolean matchByMan = manufacturer != null && dbMan != null && dbMan.contains(manufacturer);
+
+            if (matchByProd || matchByMan) {
+                // 부분 매칭된 경우 위험 점수 계산 (필드별로 넘김)
+                int riskScore = RiskEvaluator.calculateRiskScore(
+                        productName,
+                        manufacturer,
+                        null, // fallback에서는 모델명 매칭 없음
+                        p
+                );
+                String riskLevel = RiskEvaluator.riskLevelFromScore(riskScore);
+
+                return ProductSearchResponse.builder()
+                        .found(true)
+                        .productName(p.getProductNm())
+                        .defectContent(p.getShrtcomCn())
+                        .manufacturer(p.getMakr())
+                        .publicationDate(p.getRecallPublictBgnde())
+                        .riskScore(riskScore)
+                        .riskLevel(riskLevel)
+                        .message("정확 매칭 실패 → 부분 매칭 결과 반환")
+                        .build();
+            }
+        }
+        return null;
+    }
+
     private String buildDetailUrl(String recallSn) {
-        log.info("buildDetailUrl 호출 - recallSn: '{}'", recallSn);
-        
         if (!StringUtils.hasText(recallSn)) {
-            log.warn("recallSn이 null이거나 빈 문자열입니다: '{}'", recallSn);
             return null;
         }
-        
+
         try {
             String encodedRecallSn = URLEncoder.encode(recallSn, StandardCharsets.UTF_8);
-            String detailUrl = DETAIL_BASE_URL + "?recallSn=" + encodedRecallSn;
-            log.info("상세 URL 생성 성공: {}", detailUrl);
-            return detailUrl;
+            return DETAIL_BASE_URL + "?recallSn=" + encodedRecallSn;
         } catch (Exception e) {
             log.warn("상세 URL 생성 실패: recallSn={}", recallSn, e);
             return null;
+
+        }
+    }
+
+    // 내부 클래스: 검색 조합 후보를 담는 단순 DTO
+    private static class SearchCandidate {
+        String productName;
+        String manufacturer;
+        String modelName;
+
+        public SearchCandidate(String productName, String manufacturer, String modelName) {
+            this.productName = productName;
+            this.manufacturer = manufacturer;
+            this.modelName = modelName;
+        }
+
+        @Override
+        public String toString() {
+            return (productName != null ? productName : "") + " " +
+                    (manufacturer != null ? manufacturer : "") + " " +
+                    (modelName != null ? modelName : "");
         }
     }
 }
