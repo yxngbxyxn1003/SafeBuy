@@ -17,4 +17,7 @@ public class ProductSearchResponse {
 
     // 대체 상품 추천 리스트
     private List<AlternativeProductDto> alternatives;
+
+    private String riskLevel; // 위험 점수 (0~100)
+    private int riskScore; // 위험 단계 (고위험/중위험/저위험/없음)
 }

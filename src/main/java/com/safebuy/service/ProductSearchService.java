@@ -5,11 +5,14 @@ import com.safebuy.dto.ProductSearchRequest;
 import com.safebuy.dto.ProductSearchResponse;
 import com.safebuy.entity.RecallProduct;
 import com.safebuy.repository.RecallProductRepository;
+import com.safebuy.util.RiskEvaluator;
+import com.safebuy.util.TextNormalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -22,6 +25,7 @@ public class ProductSearchService {
     private final RecallProductRepository repository;
     private final ImageAnalysisService imageAnalysisService;
     private final AlternativeProductService alternativeProductService;
+    private final SearchQueryEnhancerService searchQueryEnhancerService; // AI 검색어 확장 서비스 주입
 
     public ProductSearchResponse searchProduct(ProductSearchRequest request) {
         log.info("제품 검색 요청: {}", request);
@@ -42,34 +46,80 @@ public class ProductSearchService {
             }
         }
 
-        // 순차적 검색 수행
-        RecallProduct foundProduct = performSequentialSearch(request);
-        
-        if (foundProduct != null) {
-            ProductSearchResponse response = ProductSearchResponse.builder()
-                    .found(true)
-                    .productName(foundProduct.getProductNm())
-                    .defectContent(foundProduct.getShrtcomCn())
-                    .manufacturer(foundProduct.getMakr())
-                    .publicationDate(foundProduct.getRecallPublictBgnde())
-                    .build();
+        // 정규화 단계
+        String normalizedProductName = TextNormalizer.normalizeText(request.getProductName());
+        String normalizedManufacturer = TextNormalizer.normalizeManufacturer(request.getManufacturer());
+        String normalizedModelName = TextNormalizer.normalizeText(request.getModelName());
 
-            // 대체 상품 추천
-            List<AlternativeProductDto> alternatives =
-                    alternativeProductService.findAlternatives(foundProduct.getProductNm(),
-                            foundProduct.getCategory(),
-                            foundProduct.getMakr());
-            response.setAlternatives(alternatives);
+        // 검색어 확장 (정규화 된 문자열 기반)
+        List<String> expandedProductNames = expandIfNotBlank(normalizedProductName);
+        List<String> expandedManufacturers = expandIfNotBlank(normalizedManufacturer);
+        List<String> expandedModels = expandIfNotBlank(normalizedModelName);
 
-            return response;
-        } else {
+        // 후보 조합 리스트 생성
+        List<SearchCandidate> candidates = buildSearchCandidates(expandedProductNames, expandedManufacturers, expandedModels);
+
+        // 순차적으로 후보 조합을 DB 대입 (순차적 검색 수행 원래 로직을 여기에 적용 후 수정함)
+        for (SearchCandidate candidate : candidates) {
+            RecallProduct foundProduct = performSequentialSearch(candidate);
+
+            if (foundProduct != null) {
+                // 위험점수 계산
+                int riskScore = RiskEvaluator.calculateRiskScore(candidate.toString(), foundProduct);
+                String riskLevel = RiskEvaluator.riskLevelFromScore(riskScore);
+
+                // 최종 응답 객체 생성
+                ProductSearchResponse response = ProductSearchResponse.builder()
+                        .found(true)
+                        .productName(foundProduct.getProductNm())
+                        .defectContent(foundProduct.getShrtcomCn())
+                        .manufacturer(foundProduct.getMakr())
+                        .publicationDate(foundProduct.getRecallPublictBgnde())
+                        .riskScore(riskScore) // 위험 점수
+                        .riskLevel(riskLevel) // 위험 단계
+                        .build();
+
+                // 대체 상품 추천
+                List<AlternativeProductDto> alternatives =
+                        alternativeProductService.findAlternatives(foundProduct.getProductNm(),
+                                foundProduct.getCategory(),
+                                foundProduct.getMakr());
+                response.setAlternatives(alternatives);
+
+                return response;
+            }
+        }
+
+        // fallback 부분 매칭
+        RecallProduct fallback = performFallbackMatch(normalizedProductName, normalizedManufacturer);
+        if (fallback != null) {
+            int riskScore = RiskEvaluator.calculateRiskScore(
+                    (normalizedProductName != null ? normalizedProductName : "") + " " +
+                            (normalizedManufacturer != null ? normalizedManufacturer : ""),
+                    fallback
+            );
+            String riskLevel = RiskEvaluator.riskLevelFromScore(riskScore);
+
             return ProductSearchResponse.builder()
-                    .found(false)
-                    .message("해당 제품은 리콜데이터에 해당하는 검색 결과가 없습니다.")
+                    .found(true)
+                    .productName(fallback.getProductNm())
+                    .defectContent(fallback.getShrtcomCn())
+                    .manufacturer(fallback.getMakr())
+                    .publicationDate(fallback.getRecallPublictBgnde())
+                    .riskScore(riskScore)
+                    .riskLevel(riskLevel)
+                    .message("정확 매칭 실패 → 부분 매칭 결과 반환")
                     .build();
         }
+
+        // 매칭되는 결과가 없는 경우
+        return ProductSearchResponse.builder()
+                .found(false)
+                .message("해당 제품은 리콜데이터 검색 결과에 존재하지 않습니다.")
+                .build();
     }
 
+    // 입력값이 최소 1개라도 있는지 확인
     private boolean isValidInput(ProductSearchRequest request) {
         return StringUtils.hasText(request.getProductName()) ||
                StringUtils.hasText(request.getManufacturer()) ||
@@ -77,6 +127,7 @@ public class ProductSearchService {
                (request.getImage() != null && !request.getImage().isEmpty());
     }
 
+    // AI 분석 결과(문자열)를 파싱해서 request 필드에 세팅
     private void parseAnalysisResult(String analysisResult, ProductSearchRequest request) {
         // AI 분석 결과에서 제품명, 제조사, 모델명 추출
         Pattern productNamePattern = Pattern.compile("제품명:\\s*([^,]+)");
@@ -98,79 +149,108 @@ public class ProductSearchService {
         }
     }
 
-    private RecallProduct performSequentialSearch(ProductSearchRequest request) {
-        // 1단계: 제품명으로만 검색
-        if (StringUtils.hasText(request.getProductName())) {
-            List<RecallProduct> products = repository.findByProductNmContainingIgnoreCase(request.getProductName());
-            if (products.size() == 1) {
-                log.info("제품명으로 단일 결과 발견: {}", products.get(0).getProductNm());
-                return products.get(0);
-            } else if (products.size() > 1) {
-                log.info("제품명으로 {}개 결과 발견, 다음 단계 진행", products.size());
-            } else {
-                log.info("제품명으로 검색 결과 없음");
+    // 특정 입력 문자열이 비어있지 않으면 확장 실행
+    private List<String> expandIfNotBlank(String value) {
+        if (StringUtils.hasText(value)) {
+            try {
+                return searchQueryEnhancerService.enhanceQuery(value);
+            } catch (Exception e) {
+                log.error("검색어 확장 실패: {}", value, e);
+                return List.of(value); // 실패 시 원래 값만 반환
             }
+        }
+        return new ArrayList<>(); // 값이 없으면 빈 리스트 반환
+    }
+
+    // 세 필드(제품명/제조사/모델명) 확장 후보를 조합해서 candidate 리스트 생성
+    private List<SearchCandidate> buildSearchCandidates(List<String> productNames, List<String> manufacturers, List<String> models) {
+        List<SearchCandidate> candidates = new ArrayList<>();
+
+        if (productNames.isEmpty()) productNames = List.of("");
+        if (manufacturers.isEmpty()) manufacturers = List.of("");
+        if (models.isEmpty()) models = List.of("");
+
+        for (String pn : productNames) {
+            for (String mf : manufacturers) {
+                for (String md : models) {
+                    candidates.add(new SearchCandidate(pn, mf, md));
+                }
+            }
+        }
+        return candidates;
+    }
+
+    // DB 검색 단계 수행 (파라미터 SearchCandidate 객체로 수정, 로직도 수정함)
+    private RecallProduct performSequentialSearch(SearchCandidate candidate) {
+        String productName = candidate.productName;
+        String manufacturer = candidate.manufacturer;
+        String modelName = candidate.modelName;
+
+        // 1단계: 제품명으로만 검색
+        if (StringUtils.hasText(productName)) {
+            List<RecallProduct> products = repository.findByProductNmContainingIgnoreCase(productName);
+            if (!products.isEmpty()) return products.get(0);
         }
 
         // 2단계: 제품명 + 제조사로 검색
-        if (StringUtils.hasText(request.getProductName()) && StringUtils.hasText(request.getManufacturer())) {
-            List<RecallProduct> products = repository.findByProductNmContainingIgnoreCaseAndMakrContainingIgnoreCase(
-                    request.getProductName(), request.getManufacturer());
-            if (products.size() == 1) {
-                log.info("제품명+제조사로 단일 결과 발견: {}", products.get(0).getProductNm());
-                return products.get(0);
-            } else if (products.size() > 1) {
-                log.info("제품명+제조사로 {}개 결과 발견, 다음 단계 진행", products.size());
-            } else {
-                log.info("제품명+제조사로 검색 결과 없음");
-            }
+        if (StringUtils.hasText(productName) && StringUtils.hasText(manufacturer)) {
+            List<RecallProduct> products = repository.findByProductNmContainingIgnoreCaseAndMakrContainingIgnoreCase(productName, manufacturer);
+            if (!products.isEmpty()) return products.get(0);
         }
 
         // 3단계: 제품명 + 제조사 + 모델명으로 검색
-        if (StringUtils.hasText(request.getProductName()) && 
-            StringUtils.hasText(request.getManufacturer()) && 
-            StringUtils.hasText(request.getModelName())) {
-            
-            List<RecallProduct> products = repository.findByProductNmContainingIgnoreCaseAndMakrContainingIgnoreCaseAndModlNmInfoContainingIgnoreCase(
-                    request.getProductName(), request.getManufacturer(), request.getModelName());
-            if (products.size() == 1) {
-                log.info("제품명+제조사+모델명으로 단일 결과 발견: {}", products.get(0).getProductNm());
-                return products.get(0);
-            } else if (products.size() > 1) {
-                log.info("제품명+제조사+모델명으로 {}개 결과 발견, 첫 번째 결과 반환", products.size());
-                return products.get(0);
-            } else {
-                log.info("제품명+제조사+모델명으로 검색 결과 없음");
-            }
+        if (StringUtils.hasText(productName) && StringUtils.hasText(manufacturer) && StringUtils.hasText(modelName)) {
+            List<RecallProduct> products = repository.findByProductNmContainingIgnoreCaseAndMakrContainingIgnoreCaseAndModlNmInfoContainingIgnoreCase(productName, manufacturer, modelName);
+            if (!products.isEmpty()) return products.get(0);
         }
 
-        // 4단계: 제조사만으로 검색 (제품명이 없는 경우)
-        if (!StringUtils.hasText(request.getProductName()) && StringUtils.hasText(request.getManufacturer())) {
-            List<RecallProduct> products = repository.findByMakrContainingIgnoreCase(request.getManufacturer());
-            if (products.size() == 1) {
-                log.info("제조사로 단일 결과 발견: {}", products.get(0).getProductNm());
-                return products.get(0);
-            } else if (products.size() > 1) {
-                log.info("제조사로 {}개 결과 발견, 첫 번째 결과 반환", products.size());
-                return products.get(0);
-            }
+        // 4단계: 제조사만으로 검색
+        if (!StringUtils.hasText(productName) && StringUtils.hasText(manufacturer)) {
+            List<RecallProduct> products = repository.findByMakrContainingIgnoreCase(manufacturer);
+            if (!products.isEmpty()) return products.get(0);
         }
 
-        // 5단계: 모델명만으로 검색 (제품명, 제조사가 없는 경우)
-        if (!StringUtils.hasText(request.getProductName()) && 
-            !StringUtils.hasText(request.getManufacturer()) && 
-            StringUtils.hasText(request.getModelName())) {
-            
-            List<RecallProduct> products = repository.findByModlNmInfoContainingIgnoreCase(request.getModelName());
-            if (products.size() == 1) {
-                log.info("모델명으로 단일 결과 발견: {}", products.get(0).getProductNm());
-                return products.get(0);
-            } else if (products.size() > 1) {
-                log.info("모델명으로 {}개 결과 발견, 첫 번째 결과 반환", products.size());
-                return products.get(0);
-            }
+        // 5단계: 모델명만으로 검색
+        if (!StringUtils.hasText(productName) && !StringUtils.hasText(manufacturer) && StringUtils.hasText(modelName)) {
+            List<RecallProduct> products = repository.findByModlNmInfoContainingIgnoreCase(modelName);
+            if (!products.isEmpty()) return products.get(0);
         }
 
         return null;
+    }
+
+    // 부분 매칭 메서드
+    private RecallProduct performFallbackMatch(String productName, String manufacturer) {
+        if (!StringUtils.hasText(productName) && !StringUtils.hasText(manufacturer)) return null;
+
+        List<RecallProduct> all = repository.findAll();
+        for (RecallProduct p : all) {
+            String dbMan = TextNormalizer.normalizeManufacturer(p.getMakr());
+            String dbProd = TextNormalizer.normalizeText(p.getProductNm());
+
+            if (productName != null && dbProd.contains(productName)) return p;
+            if (manufacturer != null && dbMan.contains(manufacturer)) return p;
+        }
+        return null;
+    }
+
+    // 내부 클래스: 검색 조합 후보를 담는 단순 DTO
+    private static class SearchCandidate {
+        String productName;
+        String manufacturer;
+        String modelName;
+
+        public SearchCandidate(String productName, String manufacturer, String modelName) {
+            this.productName = productName;
+            this.manufacturer = manufacturer;
+            this.modelName = modelName;
+        }
+
+        @Override
+        public String toString() {
+            return (productName != null ? productName : "") + " " +
+                    (manufacturer != null ? manufacturer : "") + " " +
+                    (modelName != null ? modelName : "");
+        }
     }
 }
