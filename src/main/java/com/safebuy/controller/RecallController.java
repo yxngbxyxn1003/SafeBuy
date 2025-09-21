@@ -153,8 +153,31 @@ public class RecallController {
             @RequestParam(value = "image", required = false) MultipartFile image) {
 
         try {
+            // 모바일 디버깅을 위한 상세 로깅
             log.info("제품 검색 요청 수신 - 제품명: {}, 제조사: {}, 모델명: {}, 이미지: {}",
                     productName, manufacturer, modelName, image != null ? "있음" : "없음");
+
+            // 이미지 파일 상세 정보 로깅 (모바일 문제 진단용)
+            if (image != null) {
+                log.info("이미지 파일 상세 정보 - 원본명: {}, 크기: {}, 타입: {}, 비어있음: {}", 
+                        image.getOriginalFilename(), 
+                        image.getSize(), 
+                        image.getContentType(),
+                        image.isEmpty());
+                
+                // 모바일에서 자주 발생하는 문제들 테스트
+                if (image.isEmpty()) {
+                    log.warn("모바일 업로드 문제: 이미지 파일이 비어있음");
+                }
+                if (image.getOriginalFilename() == null || image.getOriginalFilename().trim().isEmpty()) {
+                    log.warn("모바일 업로드 문제: 파일명이 없음");
+                }
+                if (image.getContentType() == null) {
+                    log.warn("모바일 업로드 문제: Content-Type이 없음");
+                }
+            } else {
+                log.warn("모바일 업로드 문제: 이미지 파일이 null로 전달됨");
+            }
 
             // 요청 DTO 구성
             ProductSearchRequest request = new ProductSearchRequest();
