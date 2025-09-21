@@ -36,19 +36,40 @@ public class ProductSearchService {
     public ProductSearchResponse searchProduct(ProductSearchRequest request) {
         log.info("제품 검색 요청: {}", request);
 
+        // 이미지 파일 상세 정보 로깅 (모바일 디버깅용)
+        if (request.getImage() != null) {
+            log.info("이미지 파일 정보 - 이름: {}, 크기: {}, 타입: {}, 비어있음: {}", 
+                    request.getImage().getOriginalFilename(),
+                    request.getImage().getSize(),
+                    request.getImage().getContentType(),
+                    request.getImage().isEmpty());
+        } else {
+            log.warn("이미지 파일이 null입니다 - 모바일 업로드 문제 가능성");
+        }
+        
         // 입력값 검증 - 최소 하나 이상의 필드가 입력되어야 함
         if (!isValidInput(request)) {
+            log.warn("입력값 검증 실패 - 모든 필드가 비어있음");
             return ProductSearchResponse.builder()
                     .found(false)
                     .message("최소 하나 이상의 정보를 입력해주세요.")
                     .build();
         }
 
-        // 이미지가 있는 경우 AI 분석 수행
-        if (request.getImage() != null && !request.getImage().isEmpty()) {
+        // 이미지가 있는 경우 AI 분석 수행 (모바일 호환성 개선)
+        if (isValidImage(request.getImage())) {
+            log.info("이미지 분석 시작");
+            try {
             String analysisResult = imageAnalysisService.analyzeImage(request.getImage());
-            if (analysisResult != null) {
+                if (analysisResult != null && !analysisResult.trim().isEmpty()) {
+                    log.info("이미지 분석 성공: {}", analysisResult);
                 parseAnalysisResult(analysisResult, request);
+                } else {
+                    log.warn("이미지 분석 결과가 비어있음");
+                }
+            } catch (Exception e) {
+                log.error("이미지 분석 중 오류 발생: {}", e.getMessage(), e);
+                // 이미지 분석 실패해도 다른 정보로 검색 계속 진행
             }
         }
 
@@ -69,7 +90,7 @@ public class ProductSearchService {
         // 단계적 DB 검색 + (변경) 필드별 위험도 계산 호출
         for (SearchCandidate candidate : candidates) {
             RecallProduct foundProduct = performSequentialSearch(candidate);
-            if (foundProduct != null) {
+        if (foundProduct != null) {
                 // (변경 사항) 이전에는 candidate.toString()으로 한 문장 비교 → 매칭 실패 원인
                 //     → 필드별로 분리해서 RiskEvaluator에 전달 (모델/제품/제조사 각각 독립 가중치)
                 int riskScore = RiskEvaluator.calculateRiskScore(
@@ -80,26 +101,27 @@ public class ProductSearchService {
                 );
                 String riskLevel = RiskEvaluator.riskLevelFromScore(riskScore);
 
-                ProductSearchResponse response = ProductSearchResponse.builder()
-                        .found(true)
-                        .productName(foundProduct.getProductNm())
-                        .defectContent(foundProduct.getShrtcomCn())
-                        .manufacturer(foundProduct.getMakr())
-                        .publicationDate(foundProduct.getRecallPublictBgnde())
+            ProductSearchResponse response = ProductSearchResponse.builder()
+                    .found(true)
+                    .productName(foundProduct.getProductNm())
+                    .defectContent(foundProduct.getShrtcomCn())
+                    .manufacturer(foundProduct.getMakr())
+                    .publicationDate(foundProduct.getRecallPublictBgnde())
+                        .detailUrl(buildDetailUrl(foundProduct.getRecallSn()))
                         .riskScore(riskScore)
                         .riskLevel(riskLevel)
-                        .build();
+                    .build();
 
-                // 대체 상품 추천
-                List<AlternativeProductDto> alternatives =
+            // 대체 상품 추천
+            List<AlternativeProductDto> alternatives =
                         alternativeProductService.findAlternatives(
                                 foundProduct.getProductNm(),
-                                foundProduct.getCategory(),
+                            foundProduct.getCategory(),
                                 foundProduct.getMakr()
                         );
-                response.setAlternatives(alternatives);
+            response.setAlternatives(alternatives);
 
-                return response;
+            return response;
             }
         }
 
@@ -111,20 +133,64 @@ public class ProductSearchService {
         }
 
         // 최종 미발견
-        return ProductSearchResponse.builder()
-                .found(false)
+            return ProductSearchResponse.builder()
+                    .found(false)
                 .message("해당 제품은 리콜데이터 검색 결과에 존재하지 않습니다.")
-                .build();
-    }
+                    .build();
+        }
 
     /* 내부 유틸 메서드 */
 
     // 입력값이 최소 1개라도 있는지 확인
     private boolean isValidInput(ProductSearchRequest request) {
-        return StringUtils.hasText(request.getProductName()) ||
-                StringUtils.hasText(request.getManufacturer()) ||
-                StringUtils.hasText(request.getModelName()) ||
-                (request.getImage() != null && !request.getImage().isEmpty());
+        boolean hasTextInput = StringUtils.hasText(request.getProductName()) ||
+                              StringUtils.hasText(request.getManufacturer()) ||
+                              StringUtils.hasText(request.getModelName());
+        boolean hasValidImage = isValidImage(request.getImage());
+        
+        log.info("입력값 검증 - 텍스트 입력: {}, 유효한 이미지: {}", hasTextInput, hasValidImage);
+        
+        return hasTextInput || hasValidImage;
+    }
+    
+    // 이미지 파일 검증 (모바일 호환성 개선)
+    private boolean isValidImage(org.springframework.web.multipart.MultipartFile image) {
+        if (image == null) {
+            return false;
+        }
+        
+        // 파일이 비어있는지 확인
+        if (image.isEmpty()) {
+            log.warn("이미지 파일이 비어있음");
+            return false;
+        }
+        
+        // 파일 크기 확인 (최대 30MB)
+        long maxSize = 30 * 1024 * 1024; // 30MB
+        if (image.getSize() > maxSize) {
+            log.warn("이미지 파일 크기가 너무 큼: {} bytes", image.getSize());
+            return false;
+        }
+        
+        // 파일 타입 확인 (모바일 호환성 개선)
+        String contentType = image.getContentType();
+        if (contentType != null) {
+            boolean isValidType = contentType.startsWith("image/") ||
+                                 contentType.equals("application/octet-stream"); // 모바일에서 가끔 이 타입으로 전송됨
+            if (!isValidType) {
+                log.warn("지원하지 않는 파일 타입: {}", contentType);
+                return false;
+            }
+        }
+        
+        // 파일명 확인
+        String originalFilename = image.getOriginalFilename();
+        if (originalFilename != null && !originalFilename.trim().isEmpty()) {
+            log.info("이미지 파일 검증 성공 - 이름: {}, 크기: {}, 타입: {}", 
+                    originalFilename, image.getSize(), contentType);
+        }
+        
+        return true;
     }
 
     // AI 분석 결과(문자열)를 파싱해서 request 필드에 세팅
@@ -247,6 +313,7 @@ public class ProductSearchService {
                         .defectContent(p.getShrtcomCn())
                         .manufacturer(p.getMakr())
                         .publicationDate(p.getRecallPublictBgnde())
+                        .detailUrl(buildDetailUrl(p.getRecallSn()))
                         .riskScore(riskScore)
                         .riskLevel(riskLevel)
                         .message("정확 매칭 실패 → 부분 매칭 결과 반환")
