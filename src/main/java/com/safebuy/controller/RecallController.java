@@ -191,8 +191,11 @@ public class RecallController {
 
             /* 상태코드 매핑 */
             // 입력값 부재 등 잘못된 요청 -> 400 ("최소 하나 이상의 정보를 입력해주세요." 메시지로 알려줌)
+            //  *추가* 서비스단에서 약한/무의미한 입력에 대해 반환하는 메시지("입력값이 너무 짧거나 의미가 없습니다...")도 400으로 매핑
             if (!response.isFound()
-                    && "최소 하나 이상의 정보를 입력해주세요.".equals(response.getMessage())) {
+                    && ("최소 하나 이상의 정보를 입력해주세요.".equals(response.getMessage())
+                    || (response.getMessage() != null
+                    && response.getMessage().startsWith("입력값이 너무 짧거나 의미가 없습니다")))) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
             }
 

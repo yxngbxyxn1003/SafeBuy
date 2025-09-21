@@ -50,13 +50,37 @@ public class TextNormalizer {
         return t;
     }
 
-    // 일반 텍스트 정규화 (제품명, 모델명 비교용) 메서드 */
+    // 일반 텍스트 정규화 (제품명, 모델명 비교용) 메서드
     public static String normalizeText(String s) {
         if (s == null) return null;
         String t = s.trim().toLowerCase(Locale.ROOT);
+
+        // 한글 자모만 단독으로 있는 문자 제거 (ㄱ-ㅎ, ㅏ-ㅣ)
+        t = t.replaceAll("[ㄱ-ㅎㅏ-ㅣ]", " ");
+
+        // 다중 공백 정리
         t = t.replaceAll("\\s+", " ").trim();
-        return t;
+        return t.isBlank() ? null : t;
     }
+
+    // 약한 검색어 판정 메서드
+    // - null/빈문자열
+    // - 한글 자모만으로 이루어진 경우
+    // - 영문/숫자/완성형 한글을 모두 제외한 뒤 길이가 2 미만인 경우
+    public static boolean isWeakQuery(String s) {
+        if (s == null) return true;
+        String t = s.trim();
+        if (t.isEmpty()) return true;
+
+        // 자모만으로 구성된 경우
+        if (t.matches("^[\\sㄱ-ㅎㅏ-ㅣ]+$")) return true;
+
+        // 의미 있는 문자만 남기고 길이 확인 (완성형 한글/영문/숫자)
+        String letters = t.replaceAll("[^0-9a-zA-Z가-힣]", "");
+        return letters.length() < 2;
+    }
+
+
 
     // 단,복수 보정용 헬퍼 메서드
     public static String[] pluralCandidates(String normalized) {

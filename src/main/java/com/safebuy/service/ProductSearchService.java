@@ -78,6 +78,20 @@ public class ProductSearchService {
         String normalizedManufacturer = TextNormalizer.normalizeManufacturer(request.getManufacturer());
         String normalizedModelName = TextNormalizer.normalizeText(request.getModelName());
 
+        // 추가: 정규화된 값이 약한 검색어면 null 처리
+        if (TextNormalizer.isWeakQuery(normalizedProductName)) normalizedProductName = null;
+        if (TextNormalizer.isWeakQuery(normalizedManufacturer)) normalizedManufacturer = null;
+        if (TextNormalizer.isWeakQuery(normalizedModelName)) normalizedModelName = null;
+
+        // 추가: 정규화 이후에도 세 필드가 모두 null이면 의미 있는 검색어가 없는 것
+        if (normalizedProductName == null && normalizedManufacturer == null && normalizedModelName == null
+                && (request.getImage() == null || request.getImage().isEmpty())) {
+            return ProductSearchResponse.builder()
+                    .found(false)
+                    .message("입력값이 너무 짧거나 의미가 없습니다. 최소 두 글자 이상의 제품명/모델명 또는 제조사를 입력해 주세요.")
+                    .build();
+        }
+
         // 검색어 확장 (정규화 된 문자열 기반)
         List<String> expandedProductNames = expandIfNotBlank(normalizedProductName);
         List<String> expandedManufacturers = expandIfNotBlank(normalizedManufacturer);
@@ -217,15 +231,16 @@ public class ProductSearchService {
 
     // 특정 입력 문자열이 비어있지 않으면 확장 실행
     private List<String> expandIfNotBlank(String value) {
-        if (StringUtils.hasText(value)) {
+        // value는 이미 정규화된 값이 들어옴
+        if (StringUtils.hasText(value) && !TextNormalizer.isWeakQuery(value)) {
             try {
                 return searchQueryEnhancerService.enhanceQuery(value);
             } catch (Exception e) {
                 log.error("검색어 확장 실패: {}", value, e);
-                return List.of(value); // 실패 시 원래 값만 반환
+                return List.of(value);
             }
         }
-        return new ArrayList<>(); // 값이 없으면 빈 리스트 반환
+        return new ArrayList<>(); // 약하거나 비어있으면 빈 리스트 → 해당 필드 미사용
     }
 
     // 세 필드(제품명/제조사/모델명) 확장 후보를 조합해서 candidate 리스트 생성
@@ -248,9 +263,9 @@ public class ProductSearchService {
 
     // DB 검색 단계 수행 (파라미터 SearchCandidate 객체로 수정, 로직도 수정함)
     private RecallProduct performSequentialSearch(SearchCandidate candidate) {
-        String productName = candidate.productName;
-        String manufacturer = candidate.manufacturer;
-        String modelName = candidate.modelName;
+        String productName = TextNormalizer.isWeakQuery(candidate.productName) ? null : candidate.productName;
+        String manufacturer = TextNormalizer.isWeakQuery(candidate.manufacturer) ? null : candidate.manufacturer;
+        String modelName = TextNormalizer.isWeakQuery(candidate.modelName) ? null : candidate.modelName;
 
         // 1단계: 제품명으로만 검색
         if (StringUtils.hasText(productName)) {
@@ -287,6 +302,8 @@ public class ProductSearchService {
 
     // 부분 매칭 메서드
     private ProductSearchResponse buildFallbackResponse(String productName, String manufacturer) {
+        if (TextNormalizer.isWeakQuery(productName)) productName = null;
+        if (TextNormalizer.isWeakQuery(manufacturer)) manufacturer = null;
         if (!StringUtils.hasText(productName) && !StringUtils.hasText(manufacturer)) return null;
 
         List<RecallProduct> all = repository.findAll();
