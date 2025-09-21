@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+
 import java.util.ArrayList;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -28,13 +29,13 @@ public class ProductSearchService {
     private final AlternativeProductService alternativeProductService;
     private final SearchQueryEnhancerService searchQueryEnhancerService; // AI 검색어 확장 서비스 주입
 
-    private static final String DETAIL_BASE_URL = 
+    private static final String DETAIL_BASE_URL =
             "https://www.consumer.go.kr/user/ftc/consumer/recallInfo/1077/selectRecallInfoForeignDetail.do";
 
 
     public ProductSearchResponse searchProduct(ProductSearchRequest request) {
         log.info("제품 검색 요청: {}", request);
-        
+
         // 입력값 검증 - 최소 하나 이상의 필드가 입력되어야 함
         if (!isValidInput(request)) {
             return ProductSearchResponse.builder()
@@ -127,9 +128,9 @@ public class ProductSearchService {
     // 입력값이 최소 1개라도 있는지 확인
     private boolean isValidInput(ProductSearchRequest request) {
         return StringUtils.hasText(request.getProductName()) ||
-               StringUtils.hasText(request.getManufacturer()) ||
-               StringUtils.hasText(request.getModelName()) ||
-               (request.getImage() != null && !request.getImage().isEmpty());
+                StringUtils.hasText(request.getManufacturer()) ||
+                StringUtils.hasText(request.getModelName()) ||
+                (request.getImage() != null && !request.getImage().isEmpty());
     }
 
     // AI 분석 결과(문자열)를 파싱해서 request 필드에 세팅
@@ -256,12 +257,14 @@ public class ProductSearchService {
             return (productName != null ? productName : "") + " " +
                     (manufacturer != null ? manufacturer : "") + " " +
                     (modelName != null ? modelName : "");
-  
+        }
+    }
+
     private String buildDetailUrl(String recallSn) {
         if (!StringUtils.hasText(recallSn)) {
             return null;
         }
-        
+
         try {
             String encodedRecallSn = URLEncoder.encode(recallSn, StandardCharsets.UTF_8);
             return DETAIL_BASE_URL + "?recallSn=" + encodedRecallSn;
