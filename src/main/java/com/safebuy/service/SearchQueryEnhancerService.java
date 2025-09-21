@@ -31,6 +31,12 @@ public class SearchQueryEnhancerService {
     // 파라미터 originalQuery : 원본 검색어
     // 리턴값 : 변형된 검색어 리스트
     public List<String> enhanceQuery(String originalQuery) {
+        // 메서드 맨 앞에 추가
+        if (com.safebuy.util.TextNormalizer.isWeakQuery(originalQuery)) {
+            log.info("검색어가 너무 약하여 확장을 건너뜁니다: {}", originalQuery);
+            return java.util.List.of(); // 빈 리스트 → 해당 필드는 검색에 사용하지 않음
+        }
+
         // 입력값이 비어있으면 빈 리스트 반환
         if (originalQuery == null || originalQuery.isBlank()) {
             return List.of();
