@@ -1,5 +1,6 @@
 package com.safebuy.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -12,6 +13,8 @@ import org.springframework.http.*;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -27,14 +30,18 @@ public class SearchQueryEnhancerService {
     // OpenAI API 엔드포인트
     private static final String OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 
+    // 확장에서 제거할 불필요 키워드 (한국어/영어)
+    private static final Set<String> INVALID_TERMS = Set.of(
+            "정보 없음", "정보없음", "없음", "모름", "N/A", "Unknown", "Not Available", "Info N/A"
+    );
+
     /* 입력된 검색어를 gpt-4o 모델을 사용하여 다양한 변형 후보 리스트로 변환하는 메서드 */
     // 파라미터 originalQuery : 원본 검색어
     // 리턴값 : 변형된 검색어 리스트
     public List<String> enhanceQuery(String originalQuery) {
-        // 메서드 맨 앞에 추가
         if (com.safebuy.util.TextNormalizer.isWeakQuery(originalQuery)) {
             log.info("검색어가 너무 약하여 확장을 건너뜁니다: {}", originalQuery);
-            return java.util.List.of(); // 빈 리스트 → 해당 필드는 검색에 사용하지 않음
+            return List.of();
         }
 
         // 입력값이 비어있으면 빈 리스트 반환
@@ -50,9 +57,10 @@ public class SearchQueryEnhancerService {
 
             // 프롬프트 메시지 정의
             String prompt = String.format(
-                    "다음 검색어의 가능한 변형, 영어 표기, 띄어쓰기 변형, 숫자 철자화 등을 JSON 배열로만 출력해라. " +
-                            "절대 마크다운이나 코드블럭(```json 같은 것) 포함하지 말고, " +
-                            "반드시 대괄호로 시작하는 JSON 배열만 출력: \"%s\"",
+                    "다음 검색어의 가능한 변형을 JSON 배열로 출력하라. " +
+                            "조건: 1) 최대 10개, 2) 중복 제거, 3) 순수 JSON 배열만 반환 (대괄호 [ ] 포함). " +
+                            "절대 마크다운이나 코드블럭(```)을 포함하지 말고, " +
+                            "추가 설명 없이 배열만 출력: \"%s\"",
                     originalQuery
             );
 
@@ -89,12 +97,25 @@ public class SearchQueryEnhancerService {
                 // 코드 블럭 제거 + JSON 배열만 추출
                 content = stripCodeFenceAndExtractJsonArray(content);
 
+                List<String> queries;
                 try {
-                    return objectMapper.readValue(content, List.class);
+                    queries = objectMapper.readValue(content, new TypeReference<List<String>>() {});
                 } catch (Exception parseEx) {
-                    log.warn("응답 JSON 파싱 실패. 원문 그대로 사용: {}", parseEx.getMessage());
-                    return List.of(content.trim());
+                    log.warn("응답 JSON 파싱 실패 → fallback 사용: {}", parseEx.getMessage());
+                    // fallback: 원문을 하나의 요소로 감싸서 반환
+                    queries = List.of(content.trim());
                 }
+
+                // 불필요 키워드 제거 + 중복 제거 + 빈 문자열 제거
+                queries = queries.stream()
+                        .map(String::trim)
+                        .filter(s -> !s.isBlank())
+                        .filter(s -> INVALID_TERMS.stream().noneMatch(invalid -> s.equalsIgnoreCase(invalid)))
+                        .distinct()
+                        .limit(10) // 안전장치: 혹시라도 10개 넘으면 자르기
+                        .collect(Collectors.toList());
+
+                return queries;
             } else {
                 log.error("OpenAI API 호출 실패. 상태 코드: {}", response.getStatusCode());
             }
@@ -109,7 +130,7 @@ public class SearchQueryEnhancerService {
     private String stripCodeFenceAndExtractJsonArray(String content) {
         if (content == null) return "[]";
 
-        // 코드블럭 제거
+        // 코드 블럭 제거
         if (content.startsWith("```")) {
             int first = content.indexOf('[');
             int last = content.lastIndexOf(']');
@@ -118,7 +139,7 @@ public class SearchQueryEnhancerService {
             }
         }
 
-        // 일반 텍스트에 배열이 섞여 있는 경우도 처리
+        // 배열 부분만 추출
         int first = content.indexOf('[');
         int last = content.lastIndexOf(']');
         if (first != -1 && last != -1 && last > first) {
