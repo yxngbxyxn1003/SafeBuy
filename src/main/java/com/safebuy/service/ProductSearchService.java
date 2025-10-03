@@ -1,5 +1,7 @@
 package com.safebuy.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.safebuy.dto.AlternativeProductDto;
 import com.safebuy.dto.ProductSearchRequest;
 import com.safebuy.dto.ProductSearchResponse;
@@ -207,9 +209,48 @@ public class ProductSearchService {
         return true;
     }
 
-    // AI 분석 결과(문자열)를 파싱해서 request 필드에 세팅
+    // AI 분석 결과(문자열)를 파싱해서 request에 제품명/제조사/모델명을 채워 넣는다.
+    // 단계:
+    // 1. JSON 파싱 시도 → productName/manufacturer/modelName 키가 있으면 그대로 세팅
+    // 2. JSON이 아니면 "제품명:", "제조사:", "모델명:" 패턴을 정규식으로 검색
+    // 3. 그래도 없으면 긴 문자열이나 따옴표 문자열 등을 fallback으로 사용
     private void parseAnalysisResult(String analysisResult, ProductSearchRequest request) {
-        // AI 분석 결과에서 제품명, 제조사, 모델명 추출
+        if (!StringUtils.hasText(analysisResult)) {
+            log.warn("이미지 분석 결과가 비어있어 파싱을 건너뜁니다.");
+            return;
+        }
+
+        // 1. JSON 파싱 시도
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode root = mapper.readTree(analysisResult);
+
+            // JSON 구조라면 키값 추출
+            String productName = root.path("productName").asText(null);
+            String manufacturer = root.path("manufacturer").asText(null);
+            String modelName = root.path("modelName").asText(null);
+
+            if (StringUtils.hasText(productName) && !StringUtils.hasText(request.getProductName())) {
+                request.setProductName(productName.trim());
+            }
+            if (StringUtils.hasText(manufacturer) && !StringUtils.hasText(request.getManufacturer())) {
+                request.setManufacturer(manufacturer.trim());
+            }
+            if (StringUtils.hasText(modelName) && !StringUtils.hasText(request.getModelName())) {
+                request.setModelName(modelName.trim());
+            }
+
+            // JSON에서 최소 하나라도 세팅됐다면 종료
+            if (StringUtils.hasText(productName) || StringUtils.hasText(manufacturer) || StringUtils.hasText(modelName)) {
+                log.info("이미지 분석 결과 JSON 파싱 성공 → request에 값 세팅 완료");
+                return;
+            }
+        } catch (Exception e) {
+            // JSON 파싱 실패는 정상적인 fallback 흐름
+            log.debug("이미지 분석 결과 JSON 파싱 실패, 정규식 기반 파싱으로 진행: {}", e.getMessage());
+        }
+
+        // 2. 정규식 패턴 매칭
         Pattern productNamePattern = Pattern.compile("제품명:\\s*([^,]+)");
         Pattern manufacturerPattern = Pattern.compile("제조사:\\s*([^,]+)");
         Pattern modelNamePattern = Pattern.compile("모델명:\\s*([^,]+)");
@@ -226,6 +267,30 @@ public class ProductSearchService {
         }
         if (modelNameMatcher.find() && !StringUtils.hasText(request.getModelName())) {
             request.setModelName(modelNameMatcher.group(1).trim());
+        }
+
+        // 3. fallback - 긴 단어/따옴표 문자열 추출
+        if (!StringUtils.hasText(request.getProductName())) {
+            // 따옴표 안의 텍스트 추출
+            Matcher quoted = Pattern.compile("\"([^\"]{2,})\"").matcher(analysisResult);
+            if (quoted.find()) {
+                request.setProductName(quoted.group(1).trim());
+                log.info("Fallback 적용(따옴표 텍스트) → productName={}", quoted.group(1).trim());
+            } else {
+                // 공백 기준으로 나눈 단어 중 길이가 긴 것 사용
+                String[] tokens = analysisResult.split("\\s+");
+                String candidate = null;
+                for (String token : tokens) {
+                    if (token.length() >= 3) {
+                        candidate = token;
+                        break;
+                    }
+                }
+                if (candidate != null) {
+                    request.setProductName(candidate.trim());
+                    log.info("Fallback 적용(긴 토큰) → productName={}", candidate.trim());
+                }
+            }
         }
     }
 
