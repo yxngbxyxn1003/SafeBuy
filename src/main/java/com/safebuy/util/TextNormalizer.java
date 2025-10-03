@@ -63,7 +63,7 @@ public class TextNormalizer {
         return t.isBlank() ? null : t;
     }
 
-    // 약한 검색어 판정 메서드
+    // 노이즈가 많은 검색어 판정 메서드
     // - null/빈문자열
     // - 한글 자모만으로 이루어진 경우
     // - 영문/숫자/완성형 한글을 모두 제외한 뒤 길이가 2 미만인 경우
