@@ -93,9 +93,9 @@ public class ProductSearchService {
         }
 
         // 검색어 확장 (정규화 된 문자열 기반)
-        List<String> expandedProductNames = expandIfNotBlank(normalizedProductName);
-        List<String> expandedManufacturers = expandIfNotBlank(normalizedManufacturer);
-        List<String> expandedModels = expandIfNotBlank(normalizedModelName);
+        List<String> expandedProductNames = expandIfNotBlank(normalizedProductName, RecallDictionaryService.Field.PRODUCT);
+        List<String> expandedManufacturers = expandIfNotBlank(normalizedManufacturer, RecallDictionaryService.Field.MANUFACTURER);
+        List<String> expandedModels = expandIfNotBlank(normalizedModelName, RecallDictionaryService.Field.MODEL);
 
         // 후보 조합 리스트 생성
         List<SearchCandidate> candidates =
@@ -230,17 +230,17 @@ public class ProductSearchService {
     }
 
     // 특정 입력 문자열이 비어있지 않으면 확장 실행
-    private List<String> expandIfNotBlank(String value) {
+    private List<String> expandIfNotBlank(String value, RecallDictionaryService.Field field) {
         // value는 이미 정규화된 값이 들어옴
         if (StringUtils.hasText(value) && !TextNormalizer.isWeakQuery(value)) {
             try {
-                return searchQueryEnhancerService.enhanceQuery(value);
+                return searchQueryEnhancerService.enhanceQuery(value, field);
             } catch (Exception e) {
                 log.error("검색어 확장 실패: {}", value, e);
                 return List.of(value);
             }
         }
-        return new ArrayList<>(); // 약하거나 비어있으면 빈 리스트 → 해당 필드 미사용
+        return new ArrayList<>(); // 노이즈가 강하거나 비어있으면 빈 리스트 → 해당 필드 미사용
     }
 
     // 세 필드(제품명/제조사/모델명) 확장 후보를 조합해서 candidate 리스트 생성

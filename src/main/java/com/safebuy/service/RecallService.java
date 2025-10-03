@@ -25,6 +25,7 @@ public class RecallService {
 
     private final RecallProductRepository repository;
     private final CategoryClassifierService categoryClassifierService;
+    private final RecallDictionaryService recallDictionaryService;
 
     @Value("${consumer.api.service-key}")
     private String serviceKey;
@@ -150,6 +151,10 @@ public class RecallService {
         }
 
         log.info("해외리콜 전체 데이터 업데이트 완료! 총 저장된 데이터 수: {}", totalSavedCount);
+
+        // 데이터 저장 끝난 후 캐시 새로고침
+        recallDictionaryService.refresh();
+        log.info("검색용 사전 캐시 새로고침 완료");
     }
 
     private String getTagValue(String tag, Element element) {
