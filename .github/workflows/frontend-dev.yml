@@ -1,0 +1,44 @@
+name: Frontend CI/CD (dev)
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy frontend to EC2 and build
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          script_stop: true
+          script: |
+            set -e
+            cd ~/apps/safebuy-frontend
+
+            # 브랜치 변경 및 최신 코드 pull
+            git fetch --all
+            git checkout dev
+            git pull origin dev
+
+            # package.json이 SafeBuy 폴더에 있을 경우
+            cd SafeBuy
+
+            # 의존성 설치 및 빌드
+            npm ci
+            npm run build
+
+            # nginx 기본 정적 경로에 빌드 파일 복사
+            sudo rm -rf /usr/share/nginx/html/*
+            sudo cp -r build/* /usr/share/nginx/html/
+
+            # nginx 재시작
+            sudo systemctl restart nginx
+
+            echo "✅ Frontend deployed successfully!"
