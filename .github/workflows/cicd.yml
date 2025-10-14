@@ -1,43 +1,36 @@
 # 워크플로의 이름 지정
-name: CI/CD
+name: CI/CD (BE)
 
 # 워크플로가 시작될 조건 지정
 on:
   push:
     branches: [main] # main 브랜치 push 시 실행
-  workflow_dispatch: # 수동 실행도 허용
+  workflow_dispatch: # 수동 실행 허용
 
 permissions:
   contents: read
-  packages: write
+  packages: write  # GHCR 푸시/풀 권한
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+  IMAGE_TAG_SHA: ${{ github.sha }}
+  IMAGE_TAG_LATEST: latest
 
 jobs:
-  build:
-    name: Build & Test
-    runs-on: ubuntu-latest # GitHub가 빌드를 수행하는 VM 환경 (EC2 서버 환경 아님)
+  build-and-push:
+    name: Build & Push image
+    runs-on: ubuntu-latest # GitHub 호스티드 러너(빌드 전용)
 
-    env:
-      # 리포 정보
-      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/safebuy
-      IMAGE_TAG_SHA: ${{ github.sha }}
-      IMAGE_TAG_LATEST: latest
-      # 원격 서버의 docker-compose 위치
-      REMOTE_APP_DIR: /home/ec2-user/stack
-      COMPOSE_FILE: /home/ec2-user/stack/docker-compose.yml
-
-    steps: # 실행 스텝 그룹화 정리
-      # 1) 리포 체크아웃
+    steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2) JDK 세팅 (Gradle 빌드용)
-      - name: Set up JDK 17
+      - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'corretto'
           java-version: '17'
 
-      # 3) Gradle 캐시 (빌드 속도 개선)
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -45,76 +38,71 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+          restore-keys: ${{ runner.os }}-gradle-
 
-      # 4) 권한 부여 후 Spring Boot 빌드 (bootJar 생성)
-      - name: Grant execute permission for gradlew
+      - name: Grant execute permission
         run: chmod +x ./gradlew
 
-      - name: Build with Gradle (bootJar only)
+      - name: Build (bootJar)
         run: ./gradlew clean bootJar
 
-      # 5) Docker 로그인
-      # 워크플로 러너에서 빌드한 이미지를 GHCR에 push하기 위해 GITHUB_TOKEN 사용(패키지 write 권한 필요)
-      - name: Docker login to GHCR (runner)
+      - name: Login GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      # 6) Docker 이미지 빌드
       - name: Build Docker image
         run: |
-          docker build -t "${IMAGE_NAME}:${IMAGE_TAG_SHA}" -t "${IMAGE_NAME}:${IMAGE_TAG_LATEST}" .
+          docker build \
+            -t "${IMAGE_NAME}:${IMAGE_TAG_SHA}" \
+            -t "${IMAGE_NAME}:${IMAGE_TAG_LATEST}" .
 
-      # 7) GHCR push
-      - name: Push Docker image to GHCR
+      - name: Push Docker image
         run: |
           docker push "${IMAGE_NAME}:${IMAGE_TAG_SHA}"
           docker push "${IMAGE_NAME}:${IMAGE_TAG_LATEST}"
 
-      # 8) 원격 서버에 docker-compose.yml 동기화
-      - name: Sync docker-compose.yml to EC2
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: 22
-          source: "docker-compose.yml"
-          target: "${{ env.REMOTE_APP_DIR }}"
-          overwrite: true
+  deploy:
+    name: Deploy on EC2 (self-hosted)
+    runs-on: self-hosted        # EC2에 설치한 러너
+    needs: build-and-push
+    env:
+      REMOTE_APP_DIR: /home/ec2-user/stack
+      COMPOSE_FILE: /home/ec2-user/stack/docker-compose.yml
 
-      # 9) 원격 서버에서 docker 로그인 (GHCR) -> 새 이미지 pull -> compose 재가동
-      - name: Deploy to EC2 via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: 22
-          script_stop: true
-          script: |
-            set -e
-            
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USER }}" --password-stdin
-            
-            cd "${{ env.REMOTE_APP_DIR }}"
-            
-            docker compose -f "${{ env.COMPOSE_FILE }}" pull
-            
-            docker compose -f "${{ env.COMPOSE_FILE }}" up -d
-            
-            docker image prune -f
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      # 10) 배포 검증 - 컨테이너 로그 확인
-      - name: Verify deployment
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: 22
-          script: |
-            echo "✅ Running containers"
-            docker ps
-            echo "📋 app logs (last 50 lines)"
-            docker logs --tail 50 safebuy-app || true
+      # 레포의 compose를 EC2 로컬 디렉터리로 복사(덮어쓰기)
+      - name: Copy compose to target dir
+        run: |
+          mkdir -p "${REMOTE_APP_DIR}"
+          cp -f docker-compose.yml "${REMOTE_APP_DIR}/docker-compose.yml"
+
+      # compose 문법 확인(빠른 실수 잡기)
+      - name: Validate compose file
+        run: |
+          if docker compose version >/dev/null 2>&1; then
+            docker compose -f "${COMPOSE_FILE}" config >/dev/null
+          else
+            docker-compose -f "${COMPOSE_FILE}" config >/dev/null
+          fi
+
+      # GHCR 로그인 — 이미지가 private이면 필요(공개면 생략 가능)
+      - name: Login GHCR (pull on EC2)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+
+      # 최신 이미지 pull & 재기동
+      - name: Pull & Up
+        run: |
+          set -e
+          cd "${REMOTE_APP_DIR}"
+          compose_cmd="docker compose"
+          if ! ${compose_cmd} version >/dev/null 2>&1; then 
+            compose_cmd="docker-compose"
+          fi
+          ${compose_cmd} -f "${COMPOSE_FILE}" pull
+          ${compose_cmd} -f "${COMPOSE_FILE}" up -d
+
+      - name: Prune dangling images
+        run: docker image prune -f

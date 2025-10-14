@@ -1,44 +1,67 @@
-name: Frontend CI/CD (dev)
+name: FE Dev CI/CD
 
 on:
   push:
-    branches: [dev]
-  workflow_dispatch:
+    branches: [ "dev" ]   # dev 브랜치에 push될 때만 실행
+  workflow_dispatch:       # 수동 실행 허용
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
+  build-and-deploy:
+    name: Build & Deploy (dev)
+    runs-on: self-hosted   # EC2에 설치한 self-hosted 러너에서 실행
+    env:
+      # 프론트 소스의 실제 작업 경로(레포 구조에 맞게 변경)
+      # 예: SafeBuy 폴더 아래 package.json이 있다면:
+      FE_WORKDIR: ${{ github.workspace }}/SafeBuy
+
+      # Nginx가 서비스하는 정적 루트(EC2에 이미 준비한 경로)
+      NGINX_ROOT: /var/www/safebuy
 
     steps:
-      - name: Deploy frontend to EC2 and build
-        uses: appleboy/ssh-action@v1.0.3
+      # 1) 체크아웃
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2) Node 세팅 (Node 20 LTS)
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: 22
-          script_stop: true
-          script: |
-            set -e
-            cd ~/apps/safebuy-frontend
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            **/package-lock.json
 
-            # 브랜치 변경 및 최신 코드 pull
-            git fetch --all
-            git checkout dev
-            git pull origin dev
+      # 3) 빌드 (작업 폴더가 서브폴더면 cd 필요)
+      - name: Install deps
+        working-directory: ${{ env.FE_WORKDIR }}
+        run: npm ci || npm install
 
-            # package.json이 SafeBuy 폴더에 있을 경우
-            cd SafeBuy
+      # API Base URL 등을 dev용으로 주입(프레임워크에 맞게 파일/변수명 수정)
+      - name: Prepare env (dev)
+        working-directory: ${{ env.FE_WORKDIR }}
+        run: |
+          # Vite 예시
+          echo 'VITE_API_BASE_URL=/api' > .env.production
 
-            # 의존성 설치 및 빌드
-            npm ci
-            npm run build
+      - name: Build (dev)
+        working-directory: ${{ env.FE_WORKDIR }}
+        run: npm run build
 
-            # nginx 기본 정적 경로에 빌드 파일 복사
-            sudo rm -rf /usr/share/nginx/html/*
-            sudo cp -r build/* /usr/share/nginx/html/
+      # 4) 배포: 빌드 산출물(dist 또는 build)을 Nginx 루트로 동기화
+      - name: Deploy to Nginx root
+        run: |
+          set -e
+          # Vite 기본 산출물: dist/, CRA는 build/
+          if [ -d "${{ env.FE_WORKDIR }}/dist" ]; then
+            sudo rsync -ah --delete "${{ env.FE_WORKDIR }}/dist/" "${{ env.NGINX_ROOT }}/"
+          elif [ -d "${{ env.FE_WORKDIR }}/build" ]; then
+            sudo rsync -ah --delete "${{ env.FE_WORKDIR }}/build/" "${{ env.NGINX_ROOT }}/"
+          else
+            echo "❌ 빌드 산출물(dist/ 또는 build/)이 없습니다." && exit 1
+          fi
 
-            # nginx 재시작
-            sudo systemctl restart nginx
-
-            echo "✅ Frontend deployed successfully!"
+      # 5) Nginx 재적용
+      - name: Reload Nginx
+        run: |
+          sudo nginx -t
+          sudo systemctl reload nginx
