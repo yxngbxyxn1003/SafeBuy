@@ -12,9 +12,12 @@ permissions:
   packages: write  # GHCR 푸시/풀 권한
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository }}
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/safebuy
   IMAGE_TAG_SHA: ${{ github.sha }}
   IMAGE_TAG_LATEST: latest
+
+  REMOTE_APP_DIR: /home/ec2-user/stack
+  COMPOSE_FILE: /home/ec2-user/stack/docker-compose.yml
 
 jobs:
   build-and-push:
@@ -64,9 +67,6 @@ jobs:
     name: Deploy on EC2 (self-hosted)
     runs-on: self-hosted        # EC2에 설치한 러너
     needs: build-and-push
-    env:
-      REMOTE_APP_DIR: /home/ec2-user/stack
-      COMPOSE_FILE: /home/ec2-user/stack/docker-compose.yml
 
     steps:
       - name: Checkout
