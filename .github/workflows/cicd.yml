@@ -8,7 +8,7 @@ on:
   workflow_dispatch: # 수동 실행도 허용
 
 permissions:
-  content: read
+  contents: read
   packages: write
 
 jobs:
