@@ -18,7 +18,7 @@ jobs:
 
     env:
       # 리포 정보
-      IMAGE_NAME: ghcr.io/${{ github.repository }}
+      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/safebuy
       IMAGE_TAG_SHA: ${{ github.sha }}
       IMAGE_TAG_LATEST: latest
       # 원격 서버의 docker-compose 위치
