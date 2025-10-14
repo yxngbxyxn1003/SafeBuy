@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+    # 1. 데이터베이스
+    mysql-db:
+        image: mysql:8.0
+        container_name: mysql-db
+        restart: always
+        environment:
+            MYSQL_DATABASE: ${MYSQL_DATABASE}
+            MYSQL_USER: ${MYSQL_USER}
+            MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+            MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+        ports:
+            - "3306:3306"
+        volumes:
+            - db_data:/var/lib/mysql
+        healthcheck:
+            test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${MYSQL_ROOT_PASSWORD}"]
+            interval: 5s
+            timeout: 5s
+            retries: 10
+  
+    # 2. 백엔드 애플리케이션 (Spring Boot 컨테이너)
+    app:
+        image: ghcr.io/yxngbxyxn1003/safebuy:latest # GHCR에서 최신 이미지 가져옴
+        container_name: safebuy-app
+        restart: always
+        depends_on:
+            - mysql-db
+        env_file:
+            - .env
+        environment:
+            SPRING_PROFILES_ACTIVE: prod
+            MYSQL_DATABASE: ${MYSQL_DATABASE}
+            MYSQL_USER: ${MYSQL_USER}
+            MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+            MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+            CONSUMER_API_SERVICE_KEY: ${CONSUMER_API_SERVICE_KEY}
+            OPENAI_API_KEY: ${OPENAI_API_KEY}
+        ports:
+            - "8080:8080"     # ✅ 호스트로 8080 노출 (호스트 Nginx가 프록시)
+        pull_policy: always
+
+    volumes:
+        db_data:
