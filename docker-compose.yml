@@ -32,10 +32,10 @@ services:
             - .env
         environment:
             SPRING_PROFILES_ACTIVE: prod
-            MYSQL_DATABASE: ${MYSQL_DATABASE}
-            MYSQL_USER: ${MYSQL_USER}
-            MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-            MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+            SPRING_DATASOURCE_URL: jdbc:mysql://mysql-db:3306/${MYSQL_DATABASE}?useSSL=false&characterEncoding=UTF-8&serverTimezone=Asia/Seoul
+            SPRING_DATASOURCE_USERNAME: ${MYSQL_USER}
+            SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
+
             CONSUMER_API_SERVICE_KEY: ${CONSUMER_API_SERVICE_KEY}
             OPENAI_API_KEY: ${OPENAI_API_KEY}
         ports:
